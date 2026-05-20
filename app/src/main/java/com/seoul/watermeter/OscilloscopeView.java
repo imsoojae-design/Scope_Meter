@@ -3,57 +3,75 @@ package com.seoul.watermeter;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Typeface;
 import android.util.AttributeSet;
 import android.view.View;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * 실시간 디지털 파형 오실로스코프 뷰
- * 1200 bps UART 신호를 시각화 (High=1, Low=0)
+ * 실시간 UART 오실로스코프 뷰
+ * 1200 bps: 1 bit = 0.833ms
+ * 표시 범위: 0 ~ 1000ms (가로 전체)
  */
 public class OscilloscopeView extends View {
 
-    private static final int MAX_BITS   = 120;   // 화면에 표시할 최대 비트 수
-    private static final int BIT_PIXELS = 6;     // 비트당 픽셀 너비
+    // 표시 시간 범위 (ms)
+    private static final float WINDOW_MS   = 1000f;
+    // 1200bps → 1bit = 0.833ms
+    private static final float BIT_MS      = 1000f / 1200f;
 
-    private final Paint gridPaint  = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // 샘플 포인트: (timeMs, level 0/1)
+    private static class Sample {
+        float timeMs;
+        int   level; // 0=Low, 1=High
+        Sample(float t, int l) { timeMs=t; level=l; }
+    }
+
+    private final List<Sample> samples = new ArrayList<>();
+    private float  startTimeMs = 0;
+    private int    signalColor = Color.parseColor("#38BDF8");
+    private boolean hasData    = false;
+
+    // Paints
+    private final Paint bgPaint     = new Paint();
+    private final Paint gridPaint   = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint signalPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint bgPaint    = new Paint();
-    private final Path  signalPath = new Path();
+    private final Paint labelPaint  = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint axisPaint   = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path  sigPath     = new Path();
 
-    private final Deque<Integer> bits = new ArrayDeque<>(); // 0 or 1
-    private int   signalColor = Color.parseColor("#38BDF8"); // accent (TX)
-    private boolean isIdle    = true;
-
-    public OscilloscopeView(Context ctx) {
-        super(ctx);
-        init();
-    }
-
-    public OscilloscopeView(Context ctx, AttributeSet attrs) {
-        super(ctx, attrs);
-        init();
-    }
+    public OscilloscopeView(Context ctx) { super(ctx); init(); }
+    public OscilloscopeView(Context ctx, AttributeSet a) { super(ctx,a); init(); }
 
     private void init() {
-        bgPaint.setColor(Color.parseColor("#0A0F1E"));
+        bgPaint.setColor(Color.parseColor("#060D1A"));
         bgPaint.setStyle(Paint.Style.FILL);
 
-        gridPaint.setColor(Color.parseColor("#1E3A5F"));
+        gridPaint.setColor(Color.parseColor("#0F2040"));
         gridPaint.setStrokeWidth(1f);
         gridPaint.setStyle(Paint.Style.STROKE);
+        gridPaint.setPathEffect(new DashPathEffect(new float[]{4,4}, 0));
 
-        signalPaint.setStrokeWidth(2.5f);
+        signalPaint.setStrokeWidth(2f);
         signalPaint.setStyle(Paint.Style.STROKE);
         signalPaint.setStrokeCap(Paint.Cap.SQUARE);
         signalPaint.setStrokeJoin(Paint.Join.MITER);
 
-        // 기본: High level (idle)
-        for (int i = 0; i < MAX_BITS; i++) bits.addLast(1);
+        labelPaint.setColor(Color.parseColor("#3A5A8A"));
+        labelPaint.setTextSize(20f);
+        labelPaint.setTypeface(Typeface.MONOSPACE);
+
+        axisPaint.setColor(Color.parseColor("#1E3A5F"));
+        axisPaint.setStrokeWidth(1.5f);
+        axisPaint.setStyle(Paint.Style.STROKE);
+
+        // 초기 Idle High
+        reset();
     }
 
     public void setSignalColor(int color) {
@@ -61,28 +79,51 @@ public class OscilloscopeView extends View {
         invalidate();
     }
 
-    // ── 바이트 데이터로 UART 비트열 추가 ─────────────────
-    public void addBytes(byte[] data) {
-        isIdle = false;
-        for (byte b : data) {
-            // UART: Start(0) + 8 data bits LSB first + Stop(1)
-            bits.addLast(0); // start bit
-            int val = b & 0xFF;
-            for (int i = 0; i < 8; i++) {
-                bits.addLast((val >> i) & 1);
-            }
-            bits.addLast(1); // stop bit
-        }
-        // 버퍼 크기 제한
-        while (bits.size() > MAX_BITS) bits.removeFirst();
+    // Idle 상태로 리셋
+    public void reset() {
+        samples.clear();
+        hasData = false;
+        startTimeMs = 0;
+        // 전체 High
+        samples.add(new Sample(0, 1));
+        samples.add(new Sample(WINDOW_MS, 1));
         postInvalidate();
     }
 
-    // ── Idle (High) 상태로 리셋 ───────────────────────────
-    public void setIdle() {
-        isIdle = true;
-        bits.clear();
-        for (int i = 0; i < MAX_BITS; i++) bits.addLast(1);
+    // 바이트 배열로 UART 비트열 생성 (실제 타이밍)
+    public void addBytes(byte[] data, float offsetMs) {
+        if (!hasData) {
+            samples.clear();
+            hasData = true;
+            // 전송 전 High
+            samples.add(new Sample(0, 1));
+        }
+
+        float t = offsetMs;
+
+        for (byte b : data) {
+            int val = b & 0xFF;
+
+            // Start bit (Low, 0.833ms)
+            samples.add(new Sample(t, 0));
+            t += BIT_MS;
+
+            // 8 data bits LSB first
+            for (int i = 0; i < 8; i++) {
+                int bit = (val >> i) & 1;
+                samples.add(new Sample(t, bit));
+                t += BIT_MS;
+            }
+
+            // Stop bit (High, 0.833ms)
+            samples.add(new Sample(t, 1));
+            t += BIT_MS;
+        }
+
+        // 전송 후 High 유지
+        samples.add(new Sample(t, 1));
+        samples.add(new Sample(WINDOW_MS, 1));
+
         postInvalidate();
     }
 
@@ -95,53 +136,66 @@ public class OscilloscopeView extends View {
         // 배경
         canvas.drawRect(0, 0, w, h, bgPaint);
 
-        // 그리드 (중간선)
-        float midY = h / 2f;
-        canvas.drawLine(0, midY, w, midY, gridPaint);
-        canvas.drawLine(0, 1, w, 1, gridPaint);
-        canvas.drawLine(0, h - 1, w, h - 1, gridPaint);
+        float padL = 28f, padR = 8f, padT = 6f, padB = 18f;
+        float plotW = w - padL - padR;
+        float plotH = h - padT - padB;
 
-        // 신호 그리기
-        signalPaint.setColor(signalColor);
-        signalPath.reset();
+        float highY = padT + plotH * 0.08f;
+        float lowY  = padT + plotH * 0.88f;
 
-        float highY = h * 0.1f;  // High level Y
-        float lowY  = h * 0.85f; // Low level Y
-        float bitW  = (float) w / MAX_BITS;
-
-        Integer[] bitArr = bits.toArray(new Integer[0]);
-        int startIdx = Math.max(0, bitArr.length - MAX_BITS);
-
-        float x = 0;
-        int prevBit = bitArr.length > 0 ? bitArr[startIdx] : 1;
-        float startY = prevBit == 1 ? highY : lowY;
-        signalPath.moveTo(x, startY);
-
-        for (int i = startIdx; i < bitArr.length; i++) {
-            int bit = bitArr[i];
-            float y = bit == 1 ? highY : lowY;
-            float nextX = x + bitW;
-
-            if (bit != prevBit) {
-                // 수직 전환
-                signalPath.lineTo(x, y);
+        // 그리드 (100ms 간격)
+        for (int ms = 0; ms <= 1000; ms += 100) {
+            float x = padL + (ms / WINDOW_MS) * plotW;
+            canvas.drawLine(x, padT, x, padT + plotH, gridPaint);
+            // ms 레이블 (200ms 간격)
+            if (ms % 200 == 0 && ms > 0) {
+                canvas.drawText(ms + "", x - 14, h - 3, labelPaint);
             }
-            signalPath.lineTo(nextX, y);
-
-            prevBit = bit;
-            x = nextX;
         }
 
-        // 남은 공간은 현재 레벨 유지
-        signalPath.lineTo(w, prevBit == 1 ? highY : lowY);
+        // 수평 축선
+        canvas.drawLine(padL, highY, padL + plotW, highY, gridPaint);
+        canvas.drawLine(padL, lowY,  padL + plotW, lowY,  gridPaint);
 
-        canvas.drawPath(signalPath, signalPaint);
+        // Y축
+        canvas.drawLine(padL, padT, padL, padT + plotH, axisPaint);
 
-        // High/Low 레이블
-        Paint labelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        labelPaint.setTextSize(18f);
-        labelPaint.setColor(Color.parseColor("#64748B"));
-        canvas.drawText("H", w - 20, highY + 6, labelPaint);
-        canvas.drawText("L", w - 20, lowY + 6, labelPaint);
+        // H/L 레이블
+        labelPaint.setColor(signalColor);
+        canvas.drawText("H", 2, highY + 6, labelPaint);
+        labelPaint.setColor(Color.parseColor("#3A5A8A"));
+        canvas.drawText("L", 2, lowY + 6, labelPaint);
+
+        // 신호 경로 그리기
+        if (samples.isEmpty()) return;
+
+        signalPaint.setColor(signalColor);
+        sigPath.reset();
+
+        Sample first = samples.get(0);
+        float fx = padL + (first.timeMs / WINDOW_MS) * plotW;
+        float fy = first.level == 1 ? highY : lowY;
+        sigPath.moveTo(fx, fy);
+
+        for (int i = 1; i < samples.size(); i++) {
+            Sample s = samples.get(i);
+            float x = padL + Math.min(s.timeMs / WINDOW_MS, 1f) * plotW;
+            float prevY = samples.get(i-1).level == 1 ? highY : lowY;
+            float curY  = s.level == 1 ? highY : lowY;
+
+            if (curY != prevY) {
+                // 수직 전환
+                sigPath.lineTo(x, prevY);
+                sigPath.lineTo(x, curY);
+            } else {
+                sigPath.lineTo(x, curY);
+            }
+        }
+
+        canvas.drawPath(sigPath, signalPaint);
+
+        // ms 단위 타임스케일 표시
+        labelPaint.setColor(Color.parseColor("#3A5A8A"));
+        canvas.drawText("100ms/div", padL + plotW - 80, padT + 14, labelPaint);
     }
 }

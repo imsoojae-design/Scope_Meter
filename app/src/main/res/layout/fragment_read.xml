@@ -72,7 +72,7 @@
                     android:textColor="@color/accent" android:fontFamily="monospace"/>
                 <com.seoul.watermeter.OscilloscopeView
                     android:id="@+id/oscTx"
-                    android:layout_width="0dp" android:layout_height="36dp"
+                    android:layout_width="0dp" android:layout_height="60dp"
                     android:layout_weight="1"/>
             </LinearLayout>
 
@@ -85,7 +85,7 @@
                     android:textColor="@color/green" android:fontFamily="monospace"/>
                 <com.seoul.watermeter.OscilloscopeView
                     android:id="@+id/oscRx"
-                    android:layout_width="0dp" android:layout_height="36dp"
+                    android:layout_width="0dp" android:layout_height="60dp"
                     android:layout_weight="1"/>
             </LinearLayout>
 

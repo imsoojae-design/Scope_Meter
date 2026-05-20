@@ -21,6 +21,9 @@ public class ReadFragment extends Fragment {
     private OscilloscopeView oscTx, oscRx;
     private int              addr = 1;
 
+    // TX 전송 시작 시각 (ms) - RX 파형의 상대적 오프셋 계산용
+    private long txStartMs = 0;
+
     private static final String[] LABELS = {"자동 반복 안함","10초","30초","1분","5분","1시간"};
     private static final int[]    VALS   = {0, 10000, 30000, 60000, 300000, 3600000};
 
@@ -43,8 +46,8 @@ public class ReadFragment extends Fragment {
         oscTx        = v.findViewById(R.id.oscTx);
         oscRx        = v.findViewById(R.id.oscRx);
 
-        oscTx.setSignalColor(Color.parseColor("#38BDF8")); // 파란색 TX
-        oscRx.setSignalColor(Color.parseColor("#34D399")); // 초록색 RX
+        oscTx.setSignalColor(Color.parseColor("#FFD700")); // 노란색 (CH1)
+        oscRx.setSignalColor(Color.parseColor("#00CFFF")); // 시안색 (CH2)
 
         btnAddrPlus.setOnClickListener(x -> {
             if (addr < 250) { addr++; tvAddr.setText(String.valueOf(addr)); }
@@ -83,14 +86,25 @@ public class ReadFragment extends Fragment {
         return v;
     }
 
-    // TX 파형 (요청 전송)
+    // TX 파형 (요청 전송) - 20ms 오프셋 후 시작 (High→Low 전환 후 start bit)
     public void showTxWave(byte[] data) {
-        if (oscTx != null) oscTx.addBytes(data);
+        if (oscTx == null) return;
+        txStartMs = System.currentTimeMillis();
+        oscTx.reset();
+        oscTx.addBytes(data, 30f); // 30ms 오프셋 (High 대기)
+        oscRx.reset(); // RX 초기화
     }
 
-    // RX 파형 (응답 수신)
+    // RX 파형 (응답 수신) - TX 완료 후 실제 경과시간 기반 오프셋
     public void showRxWave(byte[] data, String hexStr) {
-        if (oscRx != null) oscRx.addBytes(data);
+        if (oscRx == null) return;
+        // TX 전송 후 경과시간 계산
+        float elapsed = txStartMs > 0
+            ? (float)(System.currentTimeMillis() - txStartMs)
+            : 100f;
+        // 최소 50ms, 최대 800ms
+        float offset = Math.min(Math.max(elapsed, 50f), 800f);
+        oscRx.addBytes(data, offset);
         if (tvHexData != null) tvHexData.setText(hexStr);
     }
 
@@ -111,8 +125,8 @@ public class ReadFragment extends Fragment {
                 tvStatus.setTextColor(requireContext().getColor(R.color.muted));
                 tvStatus.setBackgroundResource(R.drawable.bg_pill_gray);
             }
-            if (oscTx != null) oscTx.setIdle();
-            if (oscRx != null) oscRx.setIdle();
+            if (oscTx != null) oscTx.reset();
+            if (oscRx != null) oscRx.reset();
             if (tvHexData != null) tvHexData.setText("—");
         }
     }
