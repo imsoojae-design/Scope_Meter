@@ -1,5 +1,8 @@
 package com.seoul.watermeter;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.text.SpannableStringBuilder;
@@ -8,8 +11,10 @@ import android.text.style.ForegroundColorSpan;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.fragment.app.Fragment;
 
@@ -19,11 +24,12 @@ import java.util.Locale;
 
 public class LogFragment extends Fragment {
 
-    private TextView              tvLog;
-    private ScrollView            scrollLog;
-    private SpannableStringBuilder logBuf    = new SpannableStringBuilder();
-    private int                   lineCount  = 0;
-    private static final int      MAX_LINES  = 300;
+    private TextView    tvLog;
+    private ScrollView  scrollLog;
+    private final SpannableStringBuilder logBuf  = new SpannableStringBuilder();
+    private final StringBuilder          rawLog  = new StringBuilder();
+    private int lineCount = 0;
+    private static final int MAX_LINES = 300;
 
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup vg, Bundle b) {
@@ -31,11 +37,29 @@ public class LogFragment extends Fragment {
         tvLog     = v.findViewById(R.id.tvLog);
         scrollLog = v.findViewById(R.id.scrollLog);
 
+        // 전체 복사 버튼
+        Button btnCopy = v.findViewById(R.id.btnCopyLog);
+        btnCopy.setOnClickListener(x -> {
+            if (rawLog.length() == 0) {
+                Toast.makeText(requireContext(), "로그 없음", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            ClipboardManager cm = (ClipboardManager)
+                requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("LOG", rawLog.toString()));
+            Toast.makeText(requireContext(), "로그 전체 복사됨", Toast.LENGTH_SHORT).show();
+        });
+
+        // 지우기 버튼
         v.findViewById(R.id.btnClearLog).setOnClickListener(x -> {
-            logBuf    = new SpannableStringBuilder();
+            logBuf.clear();
+            rawLog.setLength(0);
             lineCount = 0;
             tvLog.setText("");
         });
+
+        // 텍스트 선택 복사 활성화
+        tvLog.setTextIsSelectable(true);
 
         if (logBuf.length() > 0) tvLog.setText(logBuf);
         return v;
@@ -53,6 +77,8 @@ public class LogFragment extends Fragment {
 
         String ts   = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
         String line = "[" + ts + "] " + msg + "\n";
+
+        rawLog.append(line);
 
         int start = logBuf.length();
         logBuf.append(line);
