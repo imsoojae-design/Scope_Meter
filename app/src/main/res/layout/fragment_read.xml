@@ -60,48 +60,52 @@
 
         <!-- 오실로스코프 카드 -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:orientation="vertical" android:padding="12dp"
+            android:orientation="vertical" android:padding="10dp"
             android:layout_marginBottom="10dp" android:background="@drawable/bg_card">
 
-            <!-- TX 파형 -->
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="horizontal" android:gravity="center_vertical"
-                android:layout_marginBottom="4dp">
-                <TextView android:layout_width="28dp" android:layout_height="wrap_content"
+                android:layout_marginBottom="2dp">
+                <TextView android:layout_width="26dp" android:layout_height="wrap_content"
                     android:text="TX" android:textSize="10sp" android:textStyle="bold"
-                    android:textColor="@color/accent" android:fontFamily="monospace"/>
+                    android:textColor="#FFD700" android:fontFamily="monospace"/>
                 <com.seoul.watermeter.OscilloscopeView
                     android:id="@+id/oscTx"
-                    android:layout_width="0dp" android:layout_height="60dp"
+                    android:layout_width="0dp" android:layout_height="70dp"
                     android:layout_weight="1"/>
             </LinearLayout>
 
-            <!-- RX 파형 -->
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="horizontal" android:gravity="center_vertical"
                 android:layout_marginBottom="8dp">
-                <TextView android:layout_width="28dp" android:layout_height="wrap_content"
+                <TextView android:layout_width="26dp" android:layout_height="wrap_content"
                     android:text="RX" android:textSize="10sp" android:textStyle="bold"
-                    android:textColor="@color/green" android:fontFamily="monospace"/>
+                    android:textColor="#00CFFF" android:fontFamily="monospace"/>
                 <com.seoul.watermeter.OscilloscopeView
                     android:id="@+id/oscRx"
-                    android:layout_width="0dp" android:layout_height="60dp"
+                    android:layout_width="0dp" android:layout_height="70dp"
                     android:layout_weight="1"/>
             </LinearLayout>
 
-            <!-- HEX 데이터 -->
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="horizontal" android:gravity="center_vertical">
-                <TextView android:layout_width="28dp" android:layout_height="wrap_content"
+                <TextView android:layout_width="26dp" android:layout_height="wrap_content"
                     android:text="HEX" android:textSize="9sp" android:textColor="@color/muted"
                     android:fontFamily="monospace"/>
                 <TextView android:id="@+id/tvHexData"
                     android:layout_width="0dp" android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="—" android:textSize="10sp"
-                    android:textColor="@color/accent" android:fontFamily="monospace"
-                    android:ellipsize="end" android:maxLines="2"/>
+                    android:text="— (롱클릭 복사)"
+                    android:textSize="10sp" android:textColor="@color/accent"
+                    android:fontFamily="monospace" android:ellipsize="end"
+                    android:maxLines="2" android:longClickable="true"
+                    android:textIsSelectable="true"/>
             </LinearLayout>
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="↔ 핀치로 확대/축소" android:textSize="9sp"
+                android:textColor="@color/muted" android:layout_marginTop="4dp"
+                android:layout_gravity="end"/>
         </LinearLayout>
 
         <!-- 설정 카드 -->
@@ -129,15 +133,6 @@
                     android:backgroundTint="@color/panel"
                     style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
             </LinearLayout>
-            <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
-                android:orientation="horizontal" android:gravity="center_vertical">
-                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
-                    android:layout_weight="1" android:text="자동 반복"
-                    android:textSize="14sp" android:textColor="@color/text_color"/>
-                <Spinner android:id="@+id/spinnerRepeat"
-                    android:layout_width="140dp" android:layout_height="wrap_content"
-                    android:backgroundTint="@color/accent"/>
-            </LinearLayout>
         </LinearLayout>
 
         <!-- 버튼 -->
@@ -153,6 +148,5 @@
             android:textColor="@color/text_color" android:backgroundTint="@color/panel"
             android:enabled="false" android:layout_marginBottom="12dp"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
-
     </LinearLayout>
 </ScrollView>
