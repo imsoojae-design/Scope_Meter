@@ -22,6 +22,7 @@ public class ReadFragment extends Fragment {
     private OscilloscopeView oscTx, oscRx;
     private int              addr = 1;
     private long             txStartMs = 0;
+    private float            txDataEndMs = 0; // TX 데이터 끝 시각
 
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup vg, Bundle b) {
@@ -41,8 +42,14 @@ public class ReadFragment extends Fragment {
         oscTx        = v.findViewById(R.id.oscTx);
         oscRx        = v.findViewById(R.id.oscRx);
 
-        oscTx.setSignalColor(Color.parseColor("#FFD700"));
-        oscRx.setSignalColor(Color.parseColor("#00CFFF"));
+        oscTx.setSignalColor(Color.parseColor("#FFD700")); // 노란색 CH1
+        oscRx.setSignalColor(Color.parseColor("#00CFFF")); // 시안색 CH2
+
+        // TX/RX 줌·스크롤 동기화
+        oscTx.setZoomScrollListener((windowMs, offsetMs) ->
+            oscRx.syncZoomScroll(windowMs, offsetMs));
+        oscRx.setZoomScrollListener((windowMs, offsetMs) ->
+            oscTx.syncZoomScroll(windowMs, offsetMs));
 
         btnAddrPlus.setOnClickListener(x -> {
             if (addr < 250) { addr++; tvAddr.setText(String.valueOf(addr)); }
@@ -64,6 +71,7 @@ public class ReadFragment extends Fragment {
                 MainActivity.instance.sendRequest(addr);
         });
 
+        // HEX 롱클릭 복사
         tvHexData.setOnLongClickListener(x -> {
             String hex = tvHexData.getText().toString();
             if (!hex.isEmpty() && !hex.startsWith("—")) {
@@ -78,20 +86,41 @@ public class ReadFragment extends Fragment {
         return v;
     }
 
+    /**
+     * TX 파형 (검침 요청 전송)
+     * Low → High(35ms) → Short Frame → High 유지
+     */
     public void showTxWave(byte[] data) {
         if (oscTx == null) return;
         txStartMs = System.currentTimeMillis();
+
+        // TX: 0ms 시작, 35ms High 대기 후 start bit
         oscTx.reset();
-        oscTx.addBytes(data, 30f, true);
+        oscTx.addTxBytes(data, 0f);
+
+        // RX: Low 대기
         oscRx.reset();
     }
 
+    /**
+     * RX 파형 (계량기 응답 수신)
+     * 프로토콜: TX 완료 후 Low(0~100ms) → High(20~50ms) → data → Low
+     */
     public void showRxWave(byte[] data, String hexStr) {
         if (oscRx == null) return;
+
+        // TX 완료 후 실제 경과시간
         float elapsed = txStartMs > 0
-            ? (float)(System.currentTimeMillis() - txStartMs) : 150f;
-        float offset = Math.min(Math.max(elapsed, 50f), 450f);
-        oscRx.addBytes(data, offset, true);
+            ? (float)(System.currentTimeMillis() - txStartMs) : 200f;
+
+        // TX Short Frame(5바이트) 전송 시간 계산
+        // 5바이트 × 10bits × 0.833ms = 41.7ms + 35ms High = ~77ms
+        float txDuration = 35f + 5 * 10 * (1000f/1200f);
+
+        // RX 시작 = TX 완료 후 경과시간
+        float rxStart = txDuration + Math.min(elapsed - txDuration, 500f);
+
+        oscRx.addRxBytes(data, rxStart);
         if (tvHexData != null) tvHexData.setText(hexStr);
     }
 
