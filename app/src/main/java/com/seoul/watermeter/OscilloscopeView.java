@@ -1,170 +1,291 @@
 package com.seoul.watermeter;
 
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Color;
-import android.os.Bundle;
-import android.view.LayoutInflater;
+import android.graphics.DashPathEffect;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.Typeface;
+import android.util.AttributeSet;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.TextView;
-import android.widget.Toast;
 
-import androidx.core.content.ContextCompat;
-import androidx.fragment.app.Fragment;
+import java.util.ArrayList;
+import java.util.List;
 
-public class ReadFragment extends Fragment {
+/**
+ * 서울시 디지털계량기 프로토콜 V1.2 UART 오실로스코프 뷰
+ *
+ * TX 파형:
+ *   Low(idle) → High(20~50ms) → start bit → data → stop → High(수신대기) → Low(0~100ms후)
+ *
+ * RX 파형:
+ *   Low(idle) → Low(0~100ms) → High(20~50ms) → start bit → data → stop → Low
+ *
+ * - 핀치 줌: TX/RX 동시 확대/축소 (SharedZoom 콜백)
+ * - 좌우 스크롤: 시간축 이동
+ */
+public class OscilloscopeView extends View {
 
-    private TextView         tvReading, tvMeterNo, tvDiam, tvTime, tvStatus, tvAddr, tvHexData;
-    private Button           btnConnect, btnRequest, btnAddrPlus, btnAddrMinus;
-    private OscilloscopeView oscTx, oscRx;
-    private int              addr = 1;
-    private long             txStartMs = 0;
-    private float            txDataEndMs = 0; // TX 데이터 끝 시각
+    private static final float BIT_MS      = 1000f / 1200f;  // 0.833ms
+    private static final float MIN_WINDOW  = 30f;
+    private static final float MAX_WINDOW  = 3000f;
+    private static final float TOTAL_MS    = 3000f;  // 버퍼 전체 범위
+
+    private static class Sample {
+        float timeMs; int level;
+        Sample(float t, int l) { timeMs=t; level=l; }
+    }
+
+    // 줌/스크롤 동기화 인터페이스
+    public interface ZoomScrollListener {
+        void onZoomScroll(float windowMs, float offsetMs);
+    }
+
+    private final List<Sample> samples    = new ArrayList<>();
+    private float  windowMs   = 500f;
+    private float  offsetMs   = 0f;     // 스크롤 오프셋
+    private int    signalColor = Color.parseColor("#FFD700");
+    private ZoomScrollListener zoomListener;
+
+    private final Paint bgPaint     = new Paint();
+    private final Paint gridPaint   = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint signalPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint labelPaint  = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint axisPaint   = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path  sigPath     = new Path();
+
+    private ScaleGestureDetector scaleDetector;
+    private GestureDetector      gestureDetector;
+    private float lastX = 0f;
+
+    public OscilloscopeView(Context ctx) { super(ctx); init(); }
+    public OscilloscopeView(Context ctx, AttributeSet a) { super(ctx, a); init(); }
+
+    private void init() {
+        bgPaint.setColor(Color.parseColor("#060D1A"));
+        bgPaint.setStyle(Paint.Style.FILL);
+
+        gridPaint.setColor(Color.parseColor("#112240"));
+        gridPaint.setStrokeWidth(1f);
+        gridPaint.setStyle(Paint.Style.STROKE);
+        gridPaint.setPathEffect(new DashPathEffect(new float[]{3,4}, 0));
+
+        signalPaint.setStrokeWidth(2.5f);
+        signalPaint.setStyle(Paint.Style.STROKE);
+        signalPaint.setStrokeCap(Paint.Cap.SQUARE);
+        signalPaint.setStrokeJoin(Paint.Join.MITER);
+
+        labelPaint.setColor(Color.parseColor("#3A5A8A"));
+        labelPaint.setTextSize(18f);
+        labelPaint.setTypeface(Typeface.MONOSPACE);
+
+        axisPaint.setColor(Color.parseColor("#1E3A5F"));
+        axisPaint.setStrokeWidth(1.5f);
+        axisPaint.setStyle(Paint.Style.STROKE);
+
+        // 핀치 줌
+        scaleDetector = new ScaleGestureDetector(getContext(),
+            new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                @Override public boolean onScale(ScaleGestureDetector d) {
+                    float newWindow = Math.min(MAX_WINDOW,
+                        Math.max(MIN_WINDOW, windowMs / d.getScaleFactor()));
+                    windowMs = newWindow;
+                    clampOffset();
+                    if (zoomListener != null) zoomListener.onZoomScroll(windowMs, offsetMs);
+                    invalidate();
+                    return true;
+                }
+            });
+
+        // 좌우 스크롤
+        gestureDetector = new GestureDetector(getContext(),
+            new GestureDetector.SimpleOnGestureListener() {
+                @Override public boolean onScroll(MotionEvent e1, MotionEvent e2,
+                                                   float dx, float dy) {
+                    float msPerPx = windowMs / getWidth();
+                    offsetMs += dx * msPerPx;
+                    clampOffset();
+                    if (zoomListener != null) zoomListener.onZoomScroll(windowMs, offsetMs);
+                    invalidate();
+                    return true;
+                }
+            });
+
+        reset();
+    }
+
+    private void clampOffset() {
+        offsetMs = Math.max(0, Math.min(TOTAL_MS - windowMs, offsetMs));
+    }
 
     @Override
-    public View onCreateView(LayoutInflater inf, ViewGroup vg, Bundle b) {
-        View v = inf.inflate(R.layout.fragment_read, vg, false);
+    public boolean onTouchEvent(MotionEvent e) {
+        scaleDetector.onTouchEvent(e);
+        if (!scaleDetector.isInProgress()) gestureDetector.onTouchEvent(e);
+        return true;
+    }
 
-        tvReading    = v.findViewById(R.id.tvReading);
-        tvMeterNo    = v.findViewById(R.id.tvMeterNo);
-        tvDiam       = v.findViewById(R.id.tvDiam);
-        tvTime       = v.findViewById(R.id.tvTime);
-        tvStatus     = v.findViewById(R.id.tvStatus);
-        tvAddr       = v.findViewById(R.id.tvAddr);
-        tvHexData    = v.findViewById(R.id.tvHexData);
-        btnConnect   = v.findViewById(R.id.btnConnect);
-        btnRequest   = v.findViewById(R.id.btnRequest);
-        btnAddrPlus  = v.findViewById(R.id.btnAddrPlus);
-        btnAddrMinus = v.findViewById(R.id.btnAddrMinus);
-        oscTx        = v.findViewById(R.id.oscTx);
-        oscRx        = v.findViewById(R.id.oscRx);
+    public void setSignalColor(int color) { signalColor=color; invalidate(); }
+    public void setZoomScrollListener(ZoomScrollListener l) { zoomListener=l; }
 
-        oscTx.setSignalColor(Color.parseColor("#FFD700")); // 노란색 CH1
-        oscRx.setSignalColor(Color.parseColor("#00CFFF")); // 시안색 CH2
+    // 외부에서 줌/스크롤 동기화
+    public void syncZoomScroll(float wMs, float oMs) {
+        windowMs = wMs; offsetMs = oMs;
+        clampOffset();
+        invalidate();
+    }
 
-        // TX/RX 줌·스크롤 동기화
-        oscTx.setZoomScrollListener((windowMs, offsetMs) ->
-            oscRx.syncZoomScroll(windowMs, offsetMs));
-        oscRx.setZoomScrollListener((windowMs, offsetMs) ->
-            oscTx.syncZoomScroll(windowMs, offsetMs));
-
-        btnAddrPlus.setOnClickListener(x -> {
-            if (addr < 250) { addr++; tvAddr.setText(String.valueOf(addr)); }
-        });
-        btnAddrMinus.setOnClickListener(x -> {
-            if (addr > 1) { addr--; tvAddr.setText(String.valueOf(addr)); }
-        });
-
-        btnConnect.setOnClickListener(x -> {
-            if (MainActivity.instance == null) return;
-            if (MainActivity.instance.isConnected())
-                MainActivity.instance.disconnectUsb();
-            else
-                MainActivity.instance.connectUsb();
-        });
-
-        btnRequest.setOnClickListener(x -> {
-            if (MainActivity.instance != null)
-                MainActivity.instance.sendRequest(addr);
-        });
-
-        // HEX 롱클릭 복사
-        tvHexData.setOnLongClickListener(x -> {
-            String hex = tvHexData.getText().toString();
-            if (!hex.isEmpty() && !hex.startsWith("—")) {
-                ClipboardManager cm = (ClipboardManager)
-                    requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
-                cm.setPrimaryClip(ClipData.newPlainText("HEX", hex));
-                Toast.makeText(requireContext(), "HEX 복사됨", Toast.LENGTH_SHORT).show();
-            }
-            return true;
-        });
-
-        return v;
+    // Idle: Low
+    public void reset() {
+        samples.clear();
+        samples.add(new Sample(0, 0));
+        samples.add(new Sample(TOTAL_MS, 0));
+        offsetMs = 0;
+        postInvalidate();
     }
 
     /**
-     * TX 파형 (검침 요청 전송)
-     * Low → High(35ms) → Short Frame → High 유지
+     * TX 파형 생성 (프로토콜 V1.2 규정)
+     * Low(idle) → High(35ms) → [start+data+stop] → High(수신대기) → Low(50ms후)
      */
-    public void showTxWave(byte[] data) {
-        if (oscTx == null) return;
-        txStartMs = System.currentTimeMillis();
+    public void addTxBytes(byte[] data, float startMs) {
+        samples.clear();
 
-        // TX: 0ms 시작, 35ms High 대기 후 start bit
-        oscTx.reset();
-        oscTx.addTxBytes(data, 0f);
+        // 1. 초기 Low (idle)
+        samples.add(new Sample(0, 0));
 
-        // RX: Low 대기
-        oscRx.reset();
+        // 2. High level 전환 (20~50ms 대기) → 35ms
+        float highStart = startMs;
+        samples.add(new Sample(highStart, 1));
+
+        // 3. start bit 시작 (35ms 후)
+        float t = highStart + 35f;
+
+        for (byte b : data) {
+            int val = b & 0xFF;
+            samples.add(new Sample(t, 0)); t += BIT_MS;       // start bit
+            for (int i=0; i<8; i++) {
+                samples.add(new Sample(t, (val>>i)&1)); t += BIT_MS;
+            }
+            samples.add(new Sample(t, 1)); t += BIT_MS;       // stop bit
+        }
+
+        // 4. 전송 완료 후 High 유지 (계량기 응답 대기)
+        float txEnd = t;
+        samples.add(new Sample(txEnd, 1));
+
+        // 5. RX 완료 후 Low 전환 (약 500ms 후 — 실제는 RX 완료 후 0~100ms)
+        samples.add(new Sample(txEnd + 500f, 1));
+        samples.add(new Sample(txEnd + 550f, 0));
+        samples.add(new Sample(TOTAL_MS, 0));
+
+        postInvalidate();
     }
 
     /**
-     * RX 파형 (계량기 응답 수신)
-     * 프로토콜: TX 완료 후 Low(0~100ms) → High(20~50ms) → data → Low
+     * RX 파형 생성 (프로토콜 V1.2 규정)
+     * Low(0~100ms 대기) → High(20~50ms) → [start+data+stop] → Low
      */
-    public void showRxWave(byte[] data, String hexStr) {
-        if (oscRx == null) return;
+    public void addRxBytes(byte[] data, float rxStartMs) {
+        samples.clear();
 
-        // TX 완료 후 실제 경과시간
-        float elapsed = txStartMs > 0
-            ? (float)(System.currentTimeMillis() - txStartMs) : 200f;
+        // 1. 초기 Low
+        samples.add(new Sample(0, 0));
 
-        // TX Short Frame(5바이트) 전송 시간 계산
-        // 5바이트 × 10bits × 0.833ms = 41.7ms + 35ms High = ~77ms
-        float txDuration = 35f + 5 * 10 * (1000f/1200f);
+        // 2. Low 유지 (0~100ms) → 50ms
+        float lowEnd = rxStartMs + 50f;
+        samples.add(new Sample(rxStartMs, 0));
 
-        // RX 시작 = TX 완료 후 경과시간
-        float rxStart = txDuration + Math.min(elapsed - txDuration, 500f);
+        // 3. High 전환 (20~50ms 대기) → 35ms
+        samples.add(new Sample(lowEnd, 1));
 
-        oscRx.addRxBytes(data, rxStart);
-        if (tvHexData != null) tvHexData.setText(hexStr);
-    }
+        // 4. start bit 시작
+        float t = lowEnd + 35f;
 
-    public void onConnected(boolean on) {
-        if (btnConnect == null) return;
-        if (on) {
-            btnConnect.setText("연결 끊기");
-            btnConnect.setBackgroundTintList(
-                ContextCompat.getColorStateList(requireContext(), R.color.red));
-            btnRequest.setEnabled(true);
-        } else {
-            btnConnect.setText("USB 시리얼 연결");
-            btnConnect.setBackgroundTintList(
-                ContextCompat.getColorStateList(requireContext(), R.color.accent2));
-            btnRequest.setEnabled(false);
-            if (tvStatus != null) {
-                tvStatus.setText("대기 중");
-                tvStatus.setTextColor(requireContext().getColor(R.color.muted));
-                tvStatus.setBackgroundResource(R.drawable.bg_pill_gray);
+        for (byte b : data) {
+            int val = b & 0xFF;
+            samples.add(new Sample(t, 0)); t += BIT_MS;
+            for (int i=0; i<8; i++) {
+                samples.add(new Sample(t, (val>>i)&1)); t += BIT_MS;
             }
-            if (oscTx != null) oscTx.reset();
-            if (oscRx != null) oscRx.reset();
-            if (tvHexData != null) tvHexData.setText("— (롱클릭 복사)");
+            samples.add(new Sample(t, 1)); t += BIT_MS;
         }
+
+        // 5. 전송 완료 후 Low 전환 (0~100ms 후) → 50ms
+        samples.add(new Sample(t, 1));
+        samples.add(new Sample(t + 50f, 0));
+        samples.add(new Sample(TOTAL_MS, 0));
+
+        postInvalidate();
     }
 
-    public void updateReading(MeterProtocol.ParseResult r) {
-        if (tvReading == null) return;
-        tvReading.setText(r.readingFmt());
-        tvMeterNo.setText(r.meterNo);
-        tvDiam.setText(r.diameter > 0 ? r.diameter + " mm" : "—");
-        tvTime.setText(r.timestamp);
-        if (r.hasWarning()) {
-            tvStatus.setText("⚠ " + r.statusString());
-            tvStatus.setTextColor(requireContext().getColor(R.color.yellow));
-            tvStatus.setBackgroundResource(R.drawable.bg_pill_gray);
-        } else {
-            tvStatus.setText("✓ 정상");
-            tvStatus.setTextColor(requireContext().getColor(R.color.green));
-            tvStatus.setBackgroundResource(R.drawable.bg_pill_green);
+    @Override
+    protected void onDraw(Canvas canvas) {
+        int w=getWidth(), h=getHeight();
+        if (w==0||h==0) return;
+
+        canvas.drawRect(0,0,w,h,bgPaint);
+
+        float padL=28f, padR=6f, padT=6f, padB=20f;
+        float plotW=w-padL-padR, plotH=h-padT-padB;
+        float highY=padT+plotH*0.08f, lowY=padT+plotH*0.88f;
+
+        // 그리드
+        float divMs = windowMs/5f;
+        for (int i=0; i<=5; i++) {
+            float ms  = offsetMs + i*divMs;
+            float x   = padL + (i/(float)5)*plotW;
+            canvas.drawLine(x,padT,x,padT+plotH,gridPaint);
+            String lbl = ms>=1000 ? String.format("%.1fs",ms/1000) : (int)ms+"ms";
+            canvas.drawText(lbl, x-16, h-3, labelPaint);
         }
-        if (!r.checksumOk) {
-            tvStatus.setText(tvStatus.getText() + " 체크섬오류");
-            tvStatus.setTextColor(requireContext().getColor(R.color.red));
+        canvas.drawLine(padL,highY,padL+plotW,highY,gridPaint);
+        canvas.drawLine(padL,lowY, padL+plotW,lowY, gridPaint);
+        canvas.drawLine(padL,padT,padL,padT+plotH,axisPaint);
+
+        // H/L 레이블
+        Paint lp = new Paint(labelPaint);
+        lp.setColor(signalColor);
+        canvas.drawText("H",2,highY+6,lp);
+        lp.setColor(Color.parseColor("#3A5A8A"));
+        canvas.drawText("L",2,lowY+6,lp);
+
+        // 타임스케일
+        String scale = divMs>=1000 ? String.format("%.0fs/div",divMs/1000) : (int)divMs+"ms/div";
+        lp.setColor(Color.parseColor("#2A4A7A"));
+        canvas.drawText(scale, padL+plotW-75, padT+14, lp);
+
+        // 신호
+        if (samples.size() < 2) return;
+        signalPaint.setColor(signalColor);
+        sigPath.reset();
+
+        boolean started = false;
+        float viewStart = offsetMs;
+        float viewEnd   = offsetMs + windowMs;
+
+        for (int i=0; i<samples.size()-1; i++) {
+            Sample a = samples.get(i);
+            Sample b2 = samples.get(i+1);
+            if (b2.timeMs < viewStart || a.timeMs > viewEnd) continue;
+
+            float t1 = Math.max(a.timeMs, viewStart);
+            float t2 = Math.min(b2.timeMs, viewEnd);
+            float x1 = padL + ((t1-viewStart)/windowMs)*plotW;
+            float x2 = padL + ((t2-viewStart)/windowMs)*plotW;
+            float y1 = a.level==1 ? highY : lowY;
+            float y2 = b2.level==1 ? highY : lowY;
+
+            if (!started) { sigPath.moveTo(x1,y1); started=true; }
+            else sigPath.lineTo(x1,y1);
+
+            if (y1!=y2) { sigPath.lineTo(x2,y1); sigPath.lineTo(x2,y2); }
+            else sigPath.lineTo(x2,y2);
         }
+        if (started) canvas.drawPath(sigPath,signalPaint);
     }
 }
