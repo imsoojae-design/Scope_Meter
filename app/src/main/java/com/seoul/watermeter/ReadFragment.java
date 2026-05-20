@@ -90,17 +90,13 @@ public class ReadFragment extends Fragment {
      * TX 파형 (검침 요청 전송)
      * Low → High(35ms) → Short Frame → High 유지
      */
-    public void showTxWave(byte[] data) {
-        if (oscTx == null) return;
-        txStartMs = System.currentTimeMillis();
-
-        // TX: 0ms 시작, 35ms High 대기 후 start bit
-        oscTx.reset();
-        oscTx.addTxBytes(data, 0f);
-
-        // RX: Low 대기
-        oscRx.reset();
-    }
+public void showTxWave(byte[] data) {
+    if (oscTx == null) return;
+    txStartMs = System.currentTimeMillis();
+    // TX: 50ms 지점에서 High 전환 후 35ms 대기 후 start bit
+    oscTx.addTxBytes(data, 50f);
+    oscRx.reset();
+}
 
     /**
      * RX 파형 (계량기 응답 수신)
