@@ -158,9 +158,9 @@ public class OscilloscopeView extends View {
         // 1. 초기 Low (idle)
         samples.add(new Sample(0, 0));
 
-        // 2. 검침 요청 직전까지 Low 유지 → High 전환 (35ms 대기)
-        samples.add(new Sample(startMs, 0));  // Low 유지
-        samples.add(new Sample(startMs + 1f, 1));  // High 전환
+        // 2. High level 전환 (20~50ms 대기) → 35ms
+        float highStart = startMs;
+        samples.add(new Sample(highStart, 1));
 
         // 3. start bit 시작 (35ms 후)
         float t = highStart + 35f;
