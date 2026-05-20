@@ -1,14 +1,16 @@
 package com.seoul.watermeter;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
-import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
@@ -17,15 +19,9 @@ public class ReadFragment extends Fragment {
 
     private TextView         tvReading, tvMeterNo, tvDiam, tvTime, tvStatus, tvAddr, tvHexData;
     private Button           btnConnect, btnRequest, btnAddrPlus, btnAddrMinus;
-    private Spinner          spinnerRepeat;
     private OscilloscopeView oscTx, oscRx;
     private int              addr = 1;
-
-    // TX 전송 시작 시각 (ms) - RX 파형의 상대적 오프셋 계산용
-    private long txStartMs = 0;
-
-    private static final String[] LABELS = {"자동 반복 안함","10초","30초","1분","5분","1시간"};
-    private static final int[]    VALS   = {0, 10000, 30000, 60000, 300000, 3600000};
+    private long             txStartMs = 0;
 
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup vg, Bundle b) {
@@ -42,12 +38,11 @@ public class ReadFragment extends Fragment {
         btnRequest   = v.findViewById(R.id.btnRequest);
         btnAddrPlus  = v.findViewById(R.id.btnAddrPlus);
         btnAddrMinus = v.findViewById(R.id.btnAddrMinus);
-        spinnerRepeat = v.findViewById(R.id.spinnerRepeat);
         oscTx        = v.findViewById(R.id.oscTx);
         oscRx        = v.findViewById(R.id.oscRx);
 
-        oscTx.setSignalColor(Color.parseColor("#FFD700")); // 노란색 (CH1)
-        oscRx.setSignalColor(Color.parseColor("#00CFFF")); // 시안색 (CH2)
+        oscTx.setSignalColor(Color.parseColor("#FFD700"));
+        oscRx.setSignalColor(Color.parseColor("#00CFFF"));
 
         btnAddrPlus.setOnClickListener(x -> {
             if (addr < 250) { addr++; tvAddr.setText(String.valueOf(addr)); }
@@ -58,11 +53,10 @@ public class ReadFragment extends Fragment {
 
         btnConnect.setOnClickListener(x -> {
             if (MainActivity.instance == null) return;
-            if (MainActivity.instance.isConnected()) {
+            if (MainActivity.instance.isConnected())
                 MainActivity.instance.disconnectUsb();
-            } else {
+            else
                 MainActivity.instance.connectUsb();
-            }
         });
 
         btnRequest.setOnClickListener(x -> {
@@ -70,41 +64,34 @@ public class ReadFragment extends Fragment {
                 MainActivity.instance.sendRequest(addr);
         });
 
-        ArrayAdapter<String> adp = new ArrayAdapter<>(
-            requireContext(), android.R.layout.simple_spinner_dropdown_item, LABELS);
-        spinnerRepeat.setAdapter(adp);
-        spinnerRepeat.setOnItemSelectedListener(
-            new android.widget.AdapterView.OnItemSelectedListener() {
-                public void onItemSelected(android.widget.AdapterView<?> p,
-                                           View vi, int pos, long id) {
-                    if (MainActivity.instance != null)
-                        MainActivity.instance.setAutoInterval(VALS[pos], addr);
-                }
-                public void onNothingSelected(android.widget.AdapterView<?> p) {}
-            });
+        tvHexData.setOnLongClickListener(x -> {
+            String hex = tvHexData.getText().toString();
+            if (!hex.isEmpty() && !hex.startsWith("—")) {
+                ClipboardManager cm = (ClipboardManager)
+                    requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(ClipData.newPlainText("HEX", hex));
+                Toast.makeText(requireContext(), "HEX 복사됨", Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        });
 
         return v;
     }
 
-    // TX 파형 (요청 전송) - 20ms 오프셋 후 시작 (High→Low 전환 후 start bit)
     public void showTxWave(byte[] data) {
         if (oscTx == null) return;
         txStartMs = System.currentTimeMillis();
         oscTx.reset();
-        oscTx.addBytes(data, 30f); // 30ms 오프셋 (High 대기)
-        oscRx.reset(); // RX 초기화
+        oscTx.addBytes(data, 30f, true);
+        oscRx.reset();
     }
 
-    // RX 파형 (응답 수신) - TX 완료 후 실제 경과시간 기반 오프셋
     public void showRxWave(byte[] data, String hexStr) {
         if (oscRx == null) return;
-        // TX 전송 후 경과시간 계산
         float elapsed = txStartMs > 0
-            ? (float)(System.currentTimeMillis() - txStartMs)
-            : 100f;
-        // 최소 50ms, 최대 800ms
-        float offset = Math.min(Math.max(elapsed, 50f), 800f);
-        oscRx.addBytes(data, offset);
+            ? (float)(System.currentTimeMillis() - txStartMs) : 150f;
+        float offset = Math.min(Math.max(elapsed, 50f), 450f);
+        oscRx.addBytes(data, offset, true);
         if (tvHexData != null) tvHexData.setText(hexStr);
     }
 
@@ -127,7 +114,7 @@ public class ReadFragment extends Fragment {
             }
             if (oscTx != null) oscTx.reset();
             if (oscRx != null) oscRx.reset();
-            if (tvHexData != null) tvHexData.setText("—");
+            if (tvHexData != null) tvHexData.setText("— (롱클릭 복사)");
         }
     }
 
@@ -137,7 +124,6 @@ public class ReadFragment extends Fragment {
         tvMeterNo.setText(r.meterNo);
         tvDiam.setText(r.diameter > 0 ? r.diameter + " mm" : "—");
         tvTime.setText(r.timestamp);
-
         if (r.hasWarning()) {
             tvStatus.setText("⚠ " + r.statusString());
             tvStatus.setTextColor(requireContext().getColor(R.color.yellow));
